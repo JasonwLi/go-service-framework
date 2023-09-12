@@ -1,17 +1,20 @@
-package poller
+package contract_poller
 
 import (
 	"context"
-
 	"github.com/coherentopensource/go-service-framework/pool"
 )
 
 type Driver interface {
 	Blockchain() string
 	GetChainTipNumber(ctx context.Context) (uint64, error)
-	IsValidBlock(ctx context.Context, index uint64) error
-	FetchSequence(index uint64) map[string]pool.Runner
+	// FetchSequence involves fetching trace and receipt from ethrpc node
+	FetchSequence(blockNumber uint64) map[string]pool.Runner
+	// Fetchers involves fetching contract's abi and metadata, using results from FetchContractAddresses
+	Fetchers() map[string]pool.FeedTransformer
+	// Accumulate involves combining abi, metadata to form a complete contract, building fragments
 	Accumulate(res interface{}) pool.Runner
+	// Writers involves writing to postgresDB
 	Writers() []pool.FeedTransformer
 }
 

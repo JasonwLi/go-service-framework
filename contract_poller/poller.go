@@ -1,15 +1,11 @@
-package poller
+package contract_poller
 
 import (
 	"context"
-	"fmt"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/coherentopensource/go-service-framework/constants"
 	"github.com/coherentopensource/go-service-framework/pool"
 	"github.com/coherentopensource/go-service-framework/util"
+	"sync"
+	"time"
 )
 
 // Modes determine what the poller does on each iteration of its main routine's loop; these are determined by
@@ -38,11 +34,11 @@ type Poller struct {
 	driver         Driver
 	cache          Cache
 	fetchPool      *pool.WorkerPool
+	getAddressPool *pool.WorkerPool
 	accumulatePool *pool.WorkerPool
 	writePool      *pool.WorkerPool
 	cancelFunc     context.CancelFunc
 	runCtx         context.Context
-	cursorKey      string
 }
 
 // New constructs a new poller, given a config, a chain-specific driver, and a variadic array of options
@@ -61,17 +57,9 @@ func New(cfg *Config, driver Driver, opts ...opt) *Poller {
 	for _, opt := range opts {
 		opt(&p)
 	}
-
+	p.fetchPool.SetGroupInputFeed(p.getAddressPool.Results(), p.driver.Fetchers())
 	p.accumulatePool.SetInputFeed(p.fetchPool.Results(), p.driver.Accumulate)
 	p.writePool.SetInputFeed(p.accumulatePool.Results(), p.driver.Writers()...)
-
-	p.cursorKey = strings.TrimSpace(cfg.CursorKey)
-	if p.cursorKey == "" {
-		if p.cfg.IsTraceBackfill {
-			p.logger.Fatal("cursor key must be set when trace backfill is enabled")
-		}
-		p.cursorKey = fmt.Sprintf("%s-%s", p.driver.Blockchain(), constants.BlockKey)
-	}
 
 	return &p
 }
@@ -83,7 +71,7 @@ func (p *Poller) Start(ctx context.Context) error {
 	p.runCtx = ctx
 	p.cancelFunc = cancel
 
-	p.logger.Infof("Main poller worker starting for blockchain [%s]", p.driver.Blockchain())
+	p.logger.Infof("Contract poller worker starting for blockchain [%s]", p.driver.Blockchain())
 	go func() {
 		for {
 			//	Check for context cancellation
@@ -116,27 +104,21 @@ func (p *Poller) Start(ctx context.Context) error {
 				continue
 			case ModeBackfill:
 				//	If in ""backfill" mode, consume a batch of blocks and update the cursor
-				p.logger.Infof("Batch mode: start polling at block %d with batch size %d", cursor, p.cfg.BatchSize)
+				p.logger.Infof("Batch mode: start polling contracts at block %d with batch size %d", cursor, p.cfg.BatchSize)
 				wg := sync.WaitGroup{}
 				startIndex := cursor
 				for i := 0; i < p.cfg.BatchSize; i++ {
 					wg.Add(p.driverTaskLoad())
-					p.fetchPool.PushGroup(p.driver.FetchSequence(startIndex+uint64(i)), &wg)
+					p.getAddressPool.PushGroup(p.driver.FetchSequence(cursor), &wg)
 				}
 				wg.Wait()
 				cursor = startIndex + uint64(p.cfg.BatchSize)
 			case ModeChaintip:
 				//	If in "chaintip" mode, pull the latest block, validate it, then consume it
 				p.logger.Infof("Chaintip mode: pulling block %d", cursor)
-				if p.driver.IsValidBlock(ctx, cursor); err != nil {
-					p.logger.Errorf("Invalid block (possible reorg detected) - %v", err)
-					//	Sleep for N seconds if invalid block is detected
-					p.setSleepMode()
-					continue
-				}
 				wg := sync.WaitGroup{}
 				wg.Add(p.driverTaskLoad())
-				p.fetchPool.PushGroup(p.driver.FetchSequence(cursor), &wg)
+				p.getAddressPool.PushGroup(p.driver.FetchSequence(cursor), &wg)
 				wg.Wait()
 				cursor++
 			}
@@ -148,7 +130,7 @@ func (p *Poller) Start(ctx context.Context) error {
 			}
 
 			//	Log/stat update
-			p.logger.Infof("finished polling at block %d with batch size %d", cursor, p.cfg.BatchSize)
+			p.logger.Infof("finished polling contracts at block %d with batch size %d", cursor, p.cfg.BatchSize)
 			p.metrics.Gauge("keep_up_with_chain_tip", float64(time.Since(start).Milliseconds()), []string{}, 1.0)
 		}
 	}()

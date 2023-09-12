@@ -1,12 +1,10 @@
-package poller
+package contract_poller
 
 import (
 	"context"
-	"fmt"
-	"time"
-
 	"github.com/coherentopensource/go-service-framework/retry"
 	"github.com/pkg/errors"
+	"time"
 )
 
 // setModeAndGetCursor uses the delta between local and remote chaintip values to deduce whether poller
@@ -62,7 +60,6 @@ func (p *Poller) getCurrentChaintip(ctx context.Context) (uint64, error) {
 // setCurrentChaintip overwrites the current cached local chaintip value
 func (p *Poller) setCurrentChaintip(ctx context.Context, newTip uint64) error {
 	return retry.Exec(p.cfg.HttpRetries, func() error {
-		p.metrics.Gauge(fmt.Sprintf("%s-poller-cursor", p.cfg.Blockchain), float64(newTip), []string{}, 1.0)
 		return p.cache.SetCurrentBlockNumber(ctx, p.cacheKey(), newTip)
 	}, nil)
 }
@@ -78,7 +75,6 @@ func (p *Poller) getRemoteChaintip(ctx context.Context) (uint64, error) {
 		}
 		return nil
 	}, nil)
-	p.metrics.Gauge(fmt.Sprintf("%s-poller-chaintip", p.cfg.Blockchain), float64(chainTip), []string{}, 1.0)
 	return chainTip, err
 }
 
